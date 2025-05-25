@@ -116,22 +116,40 @@ app.get('/api/productos', async (req, res) => {
                LEFT JOIN categorias c ON p.categoria_id = c.id`;
     const params = [];
     
-    // Filtro por categoría
+    // Filtro por categoría (existente)
     if (req.query.categoria_id) {
       sql += " WHERE p.categoria_id = ?";
       params.push(req.query.categoria_id);
     }
     
-    // Filtro por SKU (versión mejorada)
+    // Filtro por SKU (existente)
     if (req.query.sku) {
       sql += (params.length ? " AND" : " WHERE") + " p.sku LIKE ?";
-      params.push(`%${req.query.sku}%`); // Usamos LIKE para búsqueda parcial
+      params.push(`%${req.query.sku}%`);
     }
     
-    // Filtro por stock mínimo
+    // Filtro por stock mínimo (existente)
     if (req.query.stock_min) {
       sql += (params.length ? " AND" : " WHERE") + " p.stock >= ?";
       params.push(req.query.stock_min);
+    }
+
+    // NUEVO: Filtro por título del producto (búsqueda parcial)
+    if (req.query.titulo) {
+      sql += (params.length ? " AND" : " WHERE") + " p.titulo LIKE ?";
+      params.push(`%${req.query.titulo}%`);
+    }
+
+    // NUEVO: Filtro por stock exacto
+    if (req.query.stock) {
+      sql += (params.length ? " AND" : " WHERE") + " p.stock = ?";
+      params.push(req.query.stock);
+    }
+
+    // NUEVO: Filtro por rango de stock
+    if (req.query.stock_min && req.query.stock_max) {
+      sql += (params.length ? " AND" : " WHERE") + " p.stock BETWEEN ? AND ?";
+      params.push(req.query.stock_min, req.query.stock_max);
     }
 
     sql += " ORDER BY p.id DESC";
@@ -257,10 +275,6 @@ app.delete('/api/productos/:id', async (req, res) => {
       return res.status(404).json({ message: "Producto no encontrado" });
     }
 
-    // Aquí podrías agregar lógica para eliminar la imagen del filesystem si es necesario
-    // if (producto[0].imagen) {
-    //   fs.unlinkSync(path.join('uploads', producto[0].imagen));
-    // }
 
     res.json({ message: "Producto eliminado exitosamente" });
   } catch (err) {

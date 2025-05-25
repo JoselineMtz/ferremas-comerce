@@ -1,4 +1,3 @@
-// pedidosServices.js
 import express from 'express';
 import multer from 'multer';
 import path from 'path';
@@ -191,6 +190,39 @@ app.get('/api/sucursales', async (req, res) => {
     });
   }
 });
+app.put('/api/pedidos/:id/estado', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { estado } = req.body;
+
+    console.log("Estado recibido:", estado);  // Imprimir el estado recibido en el servidor
+
+    // Verificar si el estado es válido
+    const estadosValidos = ['pendiente', 'procesado', 'enviado', 'entregado', 'cancelado'];
+
+    if (!estado || !estadosValidos.includes(estado)) {
+      return res.status(400).json({ message: `Estado inválido. Los valores permitidos son: ${estadosValidos.join(', ')}` });
+    }
+
+    // Realizar la actualización del estado
+    const [result] = await db.query(
+      `UPDATE pedidos SET estado = ? WHERE id = ?`,
+      [estado, id]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: "Pedido no encontrado" });
+    }
+
+    res.json({ message: `Estado del pedido ${id} actualizado a ${estado}` });
+  } catch (err) {
+    console.error("Error al actualizar el estado del pedido:", err);
+    res.status(500).json({
+      error: err.message || "Error al actualizar el estado del pedido"
+    });
+  }
+});
+
 
 // Iniciar servidor
 app.listen(PEDIDOS_PORT, () => {
