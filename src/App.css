@@ -1,0 +1,57 @@
+/* app.css */
+
+/* Importa Tailwind CSS */
+@import "tailwindcss";
+
+/* Definimos los colores personalizados */
+:root {
+  --color-black: #FCA311;
+  --color-dark-blue: #000000;
+  --color-yellow: #FCA311;
+  --color-white: #FFFFFF;
+}
+
+/* Usamos los colores definidos en Tailwind */
+.bg-black { background-color: var(--color-black); }
+.bg-dark-blue { background-color: var(--color-dark-blue); }
+.bg-yellow { background-color: var(--color-yellow); }
+.text-black { color: var(--color-black); }
+.text-dark-blue { color: var(--color-dark-blue); }
+.text-yellow { color: var(--color-yellow); }
+.text-white { color: var(--color-white); }
+
+/* Ejemplo de personalización para el logo */
+.logo {
+  background-color: var(--color-dark-blue);
+  color: var(--color-black);
+  padding:8px;
+  
+  display: inline-block;
+}
+.logo img {
+  width: 99px; /* Ajusta este valor según lo grande que quieras el logo */
+  height: 88px; /* Ajusta este valor según lo grande que quieras el logo */
+}
+/* Botones personalizados */
+button {
+  background-color: var(--color-dark-blue);
+  color: var(--color-white);
+  border-radius: 5px;
+  padding: 10px 20px;
+}
+
+button:hover {
+  background-color: var(--color-black);
+}
+
+/* Carrito de compras */
+.carrito {
+  background-color: var(--color-white);
+  border: 1px solid var(--color-dark-blue);
+}
+
+/* Otros estilos generales */
+.container {
+  max-width: 1280px;
+  margin: 0 auto;
+}
