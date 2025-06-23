@@ -16,7 +16,7 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Middleware para loguear todas las solicitudes entrantes
+// *** Middleware para loguear todas las solicitudes entrantes ***
 app.use((req, res, next) => {
   console.log(`[MercadoPago Backend] Incoming request: ${req.method} ${req.url}`);
   next();
@@ -31,34 +31,15 @@ if (typeof mercadopago.configurations.setAccessToken === 'function') {
   console.warn('setAccessToken no disponible, revisa la versión del SDK');
 }
 
-// *** RUTA DE PRUEBA ACTUALIZADA ***
+// *** RUTA DE PRUEBA ***
 app.get('/test', (req, res) => {
   console.log('[MercadoPago Backend] /test endpoint hit. Server is reachable!');
-  
-  let cartContent = null;
-  const carritoQuery = req.query.carrito; // Obtener el parámetro de consulta 'carrito'
-
-  if (carritoQuery) {
-    try {
-      cartContent = JSON.parse(carritoQuery); // Intentar parsear el JSON
-      console.log("[MercadoPago Backend] Cart content received in test:", cartContent);
-    } catch (e) {
-      console.error("[MercadoPago Backend] Error parsing carrito query parameter:", e.message);
-      cartContent = "Error: Invalid JSON in 'carrito' query parameter.";
-    }
-  } else {
-    console.log("[MercadoPago Backend] No 'carrito' query parameter provided for test.");
-  }
-
-  res.status(200).json({ 
-    message: 'Mercado Pago Backend is running and reachable!',
-    cart_test_data: cartContent // Incluir el contenido del carrito en la respuesta
-  });
+  res.status(200).json({ message: 'Mercado Pago Backend is running and reachable!' });
 });
 
 
 app.post('/crear-preferencia', async (req, res) => {
-  // NUEVO LOG CRÍTICO: ¿Estamos ejecutando este código?
+  // *** NUEVO LOG CRÍTICO: ¿Estamos ejecutando este código? ***
   console.log('[MercadoPago Backend] Executing /crear-preferencia POST handler.'); 
 
   try {
@@ -85,7 +66,7 @@ app.post('/crear-preferencia', async (req, res) => {
       // Si la preferencia se crea con esta URL, significa que Mercado Pago
       // tiene un problema con las URLs de 'localhost' cuando auto_return es 'approved'.
       back_urls: {
-        success: 'http://localhost:3000/pago-exitoso', // Cambiado a una URL de tu frontend
+        success: 'https://www.google.com', // TEMPORAL: Cambiar a una URL pública de prueba
         failure: 'http://localhost:3000/fallo-pago', 
         pending: 'http://localhost:3000/pendiente-pago'
       },
@@ -126,7 +107,7 @@ app.post('/crear-preferencia', async (req, res) => {
   }
 });
 
-// PUERTO AJUSTADO: Ahora será 3001 por defecto
+// *** PUERTO AJUSTADO: Ahora será 3001 por defecto ***
 const PORT = process.env.PORT || 3001; 
 app.listen(PORT, () => {
   console.log(`Servidor de Mercado Pago corriendo en http://localhost:${PORT}`);
