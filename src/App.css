@@ -1,0 +1,52 @@
+/* app.css */
+/* Importa Tailwind CSS */
+@import "tailwindcss";
+
+:root {
+  --color-black:  #D4A017;      /* Azul marino */
+  --color-dark-blue: #1E3A8A;  /* Cobre */
+  --color-yellow: #F8FAFC;     /* Blanco azulado */
+  --color-white: #FFFFFF;
+  --color-accent: #3B82F6;     /* Azul brillante (opcional) */
+}
+/* Clases (misma estructura, nuevos colores) */
+.bg-black { background-color: var(--color-black); }      /* Gris */
+.bg-dark-blue { background-color: var(--color-dark-blue); } /* Rojo */
+.bg-yellow { background-color: var(--color-yellow); }     /* Gris claro */
+
+.text-black { color: var(--color-black); }               /* Gris */
+.text-dark-blue { color: var(--color-dark-blue); }       /* Rojo */
+.text-yellow { color: var(--color-yellow); }             /* Gris claro */
+.text-white { color: var(--color-white); }
+
+/* Componentes actualizados */
+.logo {
+  background-color: var(--color-dark-blue); /* Rojo */
+  color: var(--color-white);               /* Texto blanco */
+  padding: 8px;
+  display: inline-block;
+}
+.logo img {
+  width: 99px;
+  height: 88px;
+}
+
+button {
+  background-color: var(--color-dark-blue); /* Rojo */
+  color: var(--color-white);
+  border-radius: 5px;
+  padding: 10px 20px;
+}
+button:hover {
+  background-color: var(--color-black);    /* Gris al hover */
+}
+
+.carrito {
+  background-color: var(--color-white);
+  border: 1px solid var(--color-black);    /* Borde gris */
+}
+
+.container {
+  max-width: 1280px;
+  margin: 0 auto;
+}
