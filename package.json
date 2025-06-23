@@ -4,15 +4,23 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run server\" \"npm run inventario\"",
+
     "build": "vite build",
     "preview": "vite preview",
     "server": "nodemon server.js",
     "inventario": "nodemon inventarioServices.js",
-    "client": "vite"
+    "client": "vite",
+
+    "start:pedidos-backend": "node pedidosServices.js",
+    "start:mercado-pago-backend": "node mercadoPago.js",
+    "start:inventario-backend": "node inventarioServices.js",
+    "start:main-backend": "node server.js",
+    "start:frontend": "cd frontend && npm start",
+    "start:all": "concurrently \"npm run start:auth-backend\" \"npm run start:pedidos-backend\" \"npm run start:mercado-pago-backend\" \"npm run start:inventario-backend\" \"npm run start:main-backend\" \"npm run start:frontend\""
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.0.15",
+    "autoprefixer": "^10.4.21",
     "axios": "^1.8.4",
     "bcrypt": "^5.1.1",
     "cors": "^2.8.5",
@@ -22,12 +30,15 @@
     "mercadopago": "^1.5.17",
     "multer": "^1.4.5-lts.2",
     "mysql2": "^3.14.1",
+    "react-icons": "^5.5.0",
+    "react-responsive-carousel": "^3.2.23",
     "react-router-dom": "^7.4.0",
     "tailwindcss": "^4.0.15"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.10",
     "@vitejs/plugin-react": "^4.4.1",
-    "concurrently": "^7.0.0",
+    "concurrently": "^7.6.0",
     "nodemon": "^3.1.10",
     "vite": "^6.2.0"
   }
