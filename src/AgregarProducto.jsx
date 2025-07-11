@@ -1,45 +1,69 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { FiSave, FiX, FiRefreshCcw } from 'react-icons/fi'; // Iconos para guardar y cerrar
-import { useNavigate } from 'react-router-dom'; // Importar useNavigate
+import { FiSave, FiX, FiRefreshCcw, FiPackage } from 'react-icons/fi'; // Añadido FiPackage para stock
+import { useNavigate } from 'react-router-dom';
 
-// Componente actualizado para manejar tanto la adición como la edición de productos
 const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
-  const navigate = useNavigate(); // Inicializar useNavigate
+  const navigate = useNavigate();
 
   const [formulario, setFormulario] = useState({
     sku: '',
     titulo: '',
     descripcion: '',
     precio: '',
-    stock: '0',
     categoria_id: '',
     imagen: null,
   });
 
   const [categorias, setCategorias] = useState([]);
+  const [sucursales, setSucursales] = useState([]); // Nuevo estado para sucursales
+  // Almacena el stock de este producto por cada sucursal
+  const [productStockPerBranch, setProductStockPerBranch] = useState({}); 
   const [mensaje, setMensaje] = useState({ tipo: '', texto: '' });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [fileInputKey, setFileInputKey] = useState(Date.now()); // Para resetear el input de archivo
-  const [isEditMode, setIsEditMode] = useState(false); // Nuevo estado para controlar el modo edición
-  const [currentImagePreview, setCurrentImagePreview] = useState(null); // Para mostrar la imagen actual en modo edición
+  const [isUpdatingStock, setIsUpdatingStock] = useState(false); // Nuevo estado para la actualización de stock
+  const [fileInputKey, setFileInputKey] = useState(Date.now());
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [currentImagePreview, setCurrentImagePreview] = useState(null);
+  const [currentImageObjectURL, setCurrentImageObjectURL] = useState(null); // Para revocar URL.createObjectURL
 
-  // Cargar categorías al cargar el componente
+  // Cargar categorías y sucursales al cargar el componente
   useEffect(() => {
-    const fetchCategorias = async () => {
+    const fetchData = async () => {
       try {
-        const response = await axios.get('http://localhost:5003/api/categorias');
-        setCategorias(response.data);
+        const [categoriasRes, sucursalesRes] = await Promise.all([
+          axios.get('http://localhost:5003/api/categorias'),
+          axios.get('http://localhost:5003/api/sucursales') // Cargar sucursales
+        ]);
+        setCategorias(categoriasRes.data);
+        setSucursales(sucursalesRes.data);
       } catch (error) {
-        console.error('Error al obtener las categorías', error);
-        mostrarMensaje('danger', 'Error al obtener las categorías. Intente recargar la página.');
+        console.error('Error al obtener datos iniciales (categorías/sucursales)', error);
+        mostrarMensaje('danger', 'Error al obtener datos. Intente recargar la página.');
       }
     };
-
-    fetchCategorias();
+    fetchData();
   }, []);
 
-  // Efecto para pre-llenar el formulario si se está editando un producto
+  // Efecto para inicializar el stock por sucursal cuando las sucursales se cargan
+  // o cuando se cambia entre modo edición y agregar.
+  useEffect(() => {
+    if (sucursales.length > 0 && !isEditMode) {
+      // Si estamos en modo "agregar nuevo producto" y las sucursales ya cargaron,
+      // inicializamos el stock de todas las sucursales a 0.
+      const initialStockMap = sucursales.reduce((acc, sucursal) => {
+          // Si ya hay un valor para esta sucursal (ej. por un reset), úsalo, sino 0.
+          acc[sucursal.sucursal_id] = productStockPerBranch[sucursal.sucursal_id] !== undefined 
+                                      ? productStockPerBranch[sucursal.sucursal_id] 
+                                      : 0;
+          return acc;
+      }, {});
+      setProductStockPerBranch(initialStockMap);
+      console.log("Stock por sucursal inicializado/asegurado para nuevo producto:", initialStockMap);
+    }
+  }, [sucursales, isEditMode]); // Depende de sucursales y de isEditMode
+
+  // Efecto para pre-llenar el formulario y cargar stock por sucursal si se está editando un producto
   useEffect(() => {
     console.log("[AgregarProducto] useEffect [productToEdit] disparado. productToEdit:", productToEdit);
     if (productToEdit) {
@@ -50,21 +74,55 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
         titulo: productToEdit.titulo || '',
         descripcion: productToEdit.descripcion || '',
         precio: productToEdit.precio ? parseFloat(productToEdit.precio).toFixed(2) : '',
-        stock: productToEdit.stock !== undefined ? String(productToEdit.stock) : '0',
         categoria_id: productToEdit.categoria_id || '',
         imagen: null, 
       };
       console.log("[AgregarProducto] Modo edición. Seteando formulario a:", newFormState);
       setFormulario(newFormState);
-      setCurrentImagePreview(productToEdit.imagen_url);
+      setCurrentImagePreview(productToEdit.imagen_url); // Esto es una URL directa, no un ObjectURL
+      
+      // Limpiar cualquier ObjectURL previo si se cambia a modo edición
+      if (currentImageObjectURL) {
+        URL.revokeObjectURL(currentImageObjectURL);
+        setCurrentImageObjectURL(null);
+      }
+
+      // Cargar stock por sucursal para el producto en edición
+      const fetchProductStock = async () => {
+        try {
+          const response = await axios.get(`http://localhost:5003/api/productos/${productToEdit.id}/stock-por-sucursal`);
+          // Mapear la respuesta a un objeto para fácil acceso por sucursal_id
+          const stockMap = response.data.reduce((acc, item) => {
+            acc[item.sucursal_id] = item.stock_cantidad;
+            return acc;
+          }, {});
+          setProductStockPerBranch(stockMap);
+          console.log("Stock por sucursal cargado para edición:", stockMap);
+        } catch (error) {
+          console.error('Error al obtener stock por sucursal del producto:', error);
+          mostrarMensaje('danger', 'Error al cargar el stock por sucursal.');
+        }
+      };
+      fetchProductStock();
+
     } else {
       console.log("[AgregarProducto] Modo agregar. Reseteando formulario.");
       setIsEditMode(false);
       resetFormulario(); 
+      // La inicialización del stock para el nuevo producto se maneja en el useEffect separado.
     }
-  }, [productToEdit]); // Se ejecuta cuando productToEdit cambia
+  }, [productToEdit]); // Depende solo de productToEdit para esta lógica.
 
-  // Función para mostrar mensajes (ya existente)
+  // Efecto para revocar el ObjectURL cuando el componente se desmonta o el ObjectURL cambia
+  useEffect(() => {
+    return () => {
+      if (currentImageObjectURL) {
+        URL.revokeObjectURL(currentImageObjectURL);
+        console.log("ObjectURL revocado:", currentImageObjectURL);
+      }
+    };
+  }, [currentImageObjectURL]);
+
   const mostrarMensaje = (tipo, texto, tiempo = 5000) => {
     setMensaje({ tipo, texto });
     if (tiempo) {
@@ -72,7 +130,6 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
     }
   };
 
-  // Manejar cambios en los inputs (ya existente)
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormulario(prev => ({
@@ -81,25 +138,38 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
     }));
   };
 
-  // Manejar cambio de imagen (ya existente, con mejora para previsualización)
+  // Manejar cambio de stock para una sucursal específica
+  const handleStockChange = (sucursalId, value) => {
+    setProductStockPerBranch(prev => ({
+      ...prev,
+      [sucursalId]: value
+    }));
+  };
+
   const handleImageChange = (e) => {
     const file = e.target.files?.[0];
     
+    // Revocar el ObjectURL previo si existe
+    if (currentImageObjectURL) {
+      URL.revokeObjectURL(currentImageObjectURL);
+      setCurrentImageObjectURL(null);
+    }
+
     if (file) {
       const tiposPermitidos = ['image/jpeg', 'image/png', 'image/gif'];
       if (!tiposPermitidos.includes(file.type)) {
         mostrarMensaje('danger', 'Solo se permiten imágenes (JPEG, PNG, GIF)');
-        e.target.value = null; // Limpiar el input de archivo
+        e.target.value = null; // Limpiar input de archivo
         setFormulario(prev => ({ ...prev, imagen: null }));
-        setCurrentImagePreview(productToEdit?.imagen_url || null); // Volver a la preview original si existía
+        setCurrentImagePreview(productToEdit?.imagen_url || null); // Volver a la imagen original o null
         return;
       }
       
       if (file.size > 5 * 1024 * 1024) {
         mostrarMensaje('danger', 'La imagen no debe superar los 5MB');
-        e.target.value = null; // Limpiar el input de archivo
+        e.target.value = null; // Limpiar input de archivo
         setFormulario(prev => ({ ...prev, imagen: null }));
-        setCurrentImagePreview(productToEdit?.imagen_url || null); // Volver a la preview original si existía
+        setCurrentImagePreview(productToEdit?.imagen_url || null); // Volver a la imagen original o null
         return;
       }
       
@@ -107,16 +177,28 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
         ...prev,
         imagen: file
       }));
-      // Crear URL de previsualización para la nueva imagen seleccionada
-      setCurrentImagePreview(URL.createObjectURL(file));
+      
+      // Intentar crear el Object URL y manejar posibles errores
+      try {
+        console.log("Intentando crear Object URL para el archivo:", file);
+        const newObjectURL = URL.createObjectURL(file);
+        setCurrentImageObjectURL(newObjectURL); // Almacenar para revocar
+        setCurrentImagePreview(newObjectURL); // Mostrar la previsualización
+      } catch (error) {
+        console.error("Error al crear Object URL para la imagen:", error);
+        mostrarMensaje('danger', 'Error al previsualizar la imagen. Intente con otra o un formato diferente.');
+        // Asegurarse de que el estado de la imagen y la previsualización se limpien en caso de error
+        setFormulario(prev => ({ ...prev, imagen: null }));
+        e.target.value = null; 
+        setCurrentImagePreview(productToEdit?.imagen_url || null);
+      }
+
     } else {
       setFormulario(prev => ({ ...prev, imagen: null }));
-      // Si se deselecciona, volver a la imagen original si estaba en modo edición
       setCurrentImagePreview(productToEdit?.imagen_url || null); 
     }
   };
 
-  // Validar formulario (ya existente)
   const validarFormulario = () => {
     if (!formulario.sku.trim()) {
       mostrarMensaje('danger', 'El SKU es obligatorio');
@@ -130,18 +212,50 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
       mostrarMensaje('danger', 'El precio debe ser un número válido mayor a 0');
       return false;
     }
-    if (isNaN(formulario.stock) || parseInt(formulario.stock) < 0) {
-      mostrarMensaje('danger', 'El stock debe ser un número válido mayor o igual a 0');
-      return false;
-    }
     if (!formulario.categoria_id) {
       mostrarMensaje('danger', 'Debe seleccionar una categoría');
       return false;
     }
+    // Validar stock de cada sucursal
+    for (const sucursal of sucursales) {
+      const stockValue = productStockPerBranch[sucursal.sucursal_id];
+      // Permite string vacío si se convierte a 0, pero no otros no-numéricos
+      if (stockValue === undefined || isNaN(parseInt(stockValue)) || parseInt(stockValue) < 0) {
+        mostrarMensaje('danger', `El stock para la sucursal "${sucursal.nombre}" debe ser un número válido mayor o igual a 0.`);
+        return false;
+      }
+    }
     return true;
   };
 
-  // Enviar formulario (MODIFICADO para Add/Edit)
+  // Función refactorizada para actualizar stock en sucursales
+  const updateStockForProductInBranches = async (productId, stockData) => {
+    let successCount = 0;
+    let errorCount = 0;
+    for (const sucursal of sucursales) {
+      const sucursalId = sucursal.sucursal_id;
+      const stockValue = parseInt(stockData[sucursalId]); // Asegura que sea un entero
+
+      // Ya validado en validarFormulario, pero se mantiene aquí como doble seguridad
+      if (isNaN(stockValue) || stockValue < 0) {
+        console.warn(`Stock inválido para sucursal ${sucursal.nombre} (${sucursalId}): ${stockData[sucursalId]}. Saltando actualización.`);
+        errorCount++;
+        continue;
+      }
+
+      try {
+        await axios.patch(`http://localhost:5003/api/productos/${productId}/sucursal/${sucursalId}/stock`, {
+          stock_cantidad: stockValue
+        });
+        successCount++;
+      } catch (error) {
+        console.error(`Error al actualizar stock para sucursal ${sucursal.nombre} (${sucursalId}):`, error);
+        errorCount++;
+      }
+    }
+    return { successCount, errorCount };
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -156,7 +270,6 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
     formData.append('titulo', formulario.titulo.trim());
     formData.append('descripcion', formulario.descripcion.trim());
     formData.append('precio', parseFloat(formulario.precio).toFixed(2)); 
-    formData.append('stock', parseInt(formulario.stock));
     formData.append('categoria_id', parseInt(formulario.categoria_id));
     
     if (formulario.imagen) {
@@ -165,8 +278,9 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
 
     try {
       let response;
+      let productIdToUpdateStock = formulario.id; // Para modo edición
+
       if (isEditMode) {
-        // Enviar PATCH o PUT para actualizar el producto
         console.log("[AgregarProducto] Enviando PUT para actualizar producto ID:", formulario.id, "con datos:", Object.fromEntries(formData.entries()));
         response = await axios.put(`http://localhost:5003/api/productos/${formulario.id}`, formData, {
           headers: {
@@ -175,62 +289,114 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
         });
         mostrarMensaje('success', 'Producto actualizado correctamente!');
       } else {
-        // Enviar POST para crear un nuevo producto
         console.log("[AgregarProducto] Enviando POST para agregar nuevo producto con datos:", Object.fromEntries(formData.entries()));
         response = await axios.post('http://localhost:5003/api/productos', formData, {
           headers: {
             'Content-Type': 'multipart/form-data',
           },
         });
-        mostrarMensaje('success', 'Producto agregado correctamente!');
+        productIdToUpdateStock = response.data.id; // Obtener el ID del nuevo producto
+        mostrarMensaje('success', 'Producto agregado correctamente. Guardando stock por sucursal...');
       }
       
-      // Llamar al callback para notificar al componente padre
-      onProductSaved?.(response.data); 
+      // Después de que el producto es creado/actualizado, actualiza su stock en las sucursales
+      const { successCount, errorCount } = await updateStockForProductInBranches(productIdToUpdateStock, productStockPerBranch);
 
+      if (isEditMode) {
+         if (errorCount > 0) {
+             mostrarMensaje('warning', `Producto actualizado. Hubo errores al actualizar stock en ${errorCount} sucursales.`);
+         } else {
+             mostrarMensaje('success', 'Producto y stock por sucursal actualizados correctamente!');
+         }
+      } else {
+          if (errorCount > 0) {
+              mostrarMensaje('warning', `Producto agregado. Hubo errores al inicializar stock en ${errorCount} sucursales.`);
+          } else {
+              mostrarMensaje('success', 'Producto agregado y stock por sucursal inicializado correctamente!');
+          }
+      }
+
+      onProductSaved?.(response.data); 
       resetFormulario();
       
     } catch (error) {
       console.error('Error al guardar producto:', error);
-      
-      let errorMsg = 'Error al guardar el producto';
+      let errorMsg = 'Error al guardar el producto.';
       if (error.response) {
-        if (error.response.data.message) { // Priorizar 'message' del backend
+        // La solicitud fue hecha y el servidor respondió con un código de estado
+        // que cae fuera del rango de 2xx
+        if (error.response.data && error.response.data.message) {
           errorMsg = error.response.data.message;
-        } else if (error.response.data.error) {
+        } else if (error.response.data && error.response.data.error) {
           errorMsg = error.response.data.error;
+        } else {
+          errorMsg = `Error del servidor: ${error.response.status} - ${error.response.statusText || 'Mensaje desconocido'}`;
         }
+      } else if (error.request) {
+        // La solicitud fue hecha pero no se recibió respuesta
+        // `error.request` es una instancia de XMLHttpRequest en el navegador y una instancia de
+        // http.ClientRequest en node.js
+        errorMsg = 'Error de red: No se pudo conectar con el servidor. Asegúrate de que el backend esté funcionando.';
+      } else {
+        // Algo sucedió al configurar la solicitud que provocó un error
+        errorMsg = `Error inesperado: ${error.message}`;
       }
-      
       mostrarMensaje('danger', errorMsg);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // Función para resetear todo el formulario
+  // Esta función ahora solo se llamará desde el botón "Actualizar Stock por Sucursal"
+  // en modo edición, o si se desea una actualización manual.
+  const handleManualStockUpdate = async () => {
+    if (!formulario.id) {
+      mostrarMensaje('danger', 'Debe seleccionar un producto existente para actualizar su stock por sucursal.');
+      return;
+    }
+    setIsUpdatingStock(true);
+    const { successCount, errorCount } = await updateStockForProductInBranches(formulario.id, productStockPerBranch);
+
+    if (successCount > 0 && errorCount === 0) {
+      mostrarMensaje('success', 'Stock por sucursal actualizado exitosamente!');
+    } else if (successCount > 0 && errorCount > 0) {
+      mostrarMensaje('warning', `Stock actualizado en ${successCount} sucursales, pero hubo errores en ${errorCount} sucursales.`);
+    } else {
+      mostrarMensaje('danger', 'No se pudo actualizar el stock en ninguna sucursal.');
+    }
+    setIsUpdatingStock(false);
+  };
+
   const resetFormulario = () => {
     setFormulario({
       sku: '',
       titulo: '',
       descripcion: '',
       precio: '',
-      stock: '0',
       categoria_id: '',
       imagen: null,
     });
-    // Forzar la recreación del input de archivo para limpiarlo visualmente
+    setProductStockPerBranch({}); // Limpiar stock por sucursal
     setTimeout(() => setFileInputKey(Date.now()), 0); 
     setCurrentImagePreview(null);
-    setMensaje({ tipo: '', texto: '' }); // Limpiar mensajes
-    setIsEditMode(false); // Asegurar que el modo edición se desactive
+    // Revocar ObjectURL al resetear el formulario
+    if (currentImageObjectURL) {
+      URL.revokeObjectURL(currentImageObjectURL);
+      setCurrentImageObjectURL(null);
+    }
+    setMensaje({ tipo: '', texto: '' });
+    setIsEditMode(false);
   };
 
-  // Eliminar imagen seleccionada (también resetea la key del input)
   const quitarImagen = () => {
     setFormulario(prev => ({ ...prev, imagen: null }));
     setTimeout(() => setFileInputKey(Date.now()), 0);
-    setCurrentImagePreview(null); // Limpiar la previsualización
+    setCurrentImagePreview(null);
+    // Revocar ObjectURL cuando la imagen es quitada
+    if (currentImageObjectURL) {
+      URL.revokeObjectURL(currentImageObjectURL);
+      setCurrentImageObjectURL(null);
+    }
   };
 
   return (
@@ -241,13 +407,10 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
         </h2>
         <button
           onClick={() => { 
-            console.log("[AgregarProducto] Clic en botón 'Cerrar formulario'.");
-            if (onCloseForm) { // Verificar si la prop onCloseForm existe
-              console.log("[AgregarProducto] Llamando a onCloseForm (prop).");
+            if (onCloseForm) {
               onCloseForm(); 
             } else {
-              console.log("[AgregarProducto] onCloseForm no definido, navegando a /admin.");
-              navigate('/admin'); // Navegar de vuelta al panel de admin
+              navigate('/admin');
             }
           }} 
           className="text-gray-500 hover:text-gray-700"
@@ -260,6 +423,8 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
       {mensaje.texto && (
         <div className={`mb-4 p-3 rounded ${mensaje.tipo === 'success' 
           ? 'bg-green-100 text-green-800 border border-green-200' 
+          : mensaje.tipo === 'warning'
+          ? 'bg-yellow-100 text-yellow-800 border border-yellow-200'
           : 'bg-red-100 text-red-800 border border-red-200'}`}>
           {mensaje.texto}
         </div>
@@ -272,7 +437,6 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
             <label className="block text-gray-700 font-medium mb-2">
               SKU <span className="text-red-500">*</span>
             </label>
-            {/* SKU no debería cambiarse en edición si es clave única */}
             <input
               type="text"
               name="sku"
@@ -284,7 +448,7 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
               maxLength="50"
               disabled={isEditMode} 
             />
-             {isEditMode && <p className="text-sm text-gray-500 mt-1">El SKU no se puede modificar.</p>}
+            {isEditMode && <p className="text-sm text-gray-500 mt-1">El SKU no se puede modificar.</p>}
           </div>
 
           {/* Título */}
@@ -338,24 +502,8 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
             </div>
           </div>
 
-          {/* Stock */}
-          <div>
-            <label className="block text-gray-700 font-medium mb-2">
-              Stock <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="number"
-              min="0"
-              name="stock"
-              value={formulario.stock}
-              onChange={handleChange}
-              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-              required
-            />
-          </div>
-
           {/* Categoría */}
-          <div className="col-span-2">
+          <div className="col-span-1"> {/* Ajustado a col-span-1 para que quede al lado del precio */}
             <label className="block text-gray-700 font-medium mb-2">
               Categoría <span className="text-red-500">*</span>
             </label>
@@ -431,7 +579,7 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
         <div className="mt-6 flex justify-end space-x-3">
           <button
             type="button"
-            onClick={resetFormulario} // Botón para resetear el formulario (vaciar campos)
+            onClick={resetFormulario}
             className="px-6 py-2 rounded-md text-gray-700 font-medium bg-gray-200 hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-offset-2 transition-colors flex items-center"
           >
             <FiRefreshCcw className="mr-2" />
@@ -463,6 +611,70 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
           </button>
         </div>
       </form>
+
+      {/* Sección para actualizar stock por sucursal (siempre visible) */}
+      <div className="bg-white p-6 rounded-lg shadow-md mt-8">
+        <h3 className="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+          <FiPackage className="mr-2" /> Stock por Sucursal
+        </h3>
+        <p className="text-sm text-gray-600 mb-4">
+          {isEditMode 
+            ? 'Actualiza la cantidad de stock de este producto para cada sucursal.'
+            : 'Establece la cantidad de stock inicial para este producto en cada sucursal.'
+          }
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {sucursales.length > 0 ? (
+            sucursales.map(sucursal => (
+              <div key={sucursal.sucursal_id} className="border border-gray-200 rounded-md p-4">
+                <label className="block text-gray-700 font-medium mb-2">
+                  {sucursal.nombre} (ID: {sucursal.sucursal_id})
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  value={productStockPerBranch[sucursal.sucursal_id] || 0}
+                  onChange={(e) => handleStockChange(sucursal.sucursal_id, e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Cantidad de stock"
+                />
+              </div>
+            ))
+          ) : (
+            <p className="col-span-full text-gray-500">No hay sucursales disponibles para gestionar el stock.</p>
+          )}
+        </div>
+        {/* El botón de actualización manual solo es relevante en modo edición */}
+        {isEditMode && (
+          <div className="mt-6 flex justify-end">
+            <button
+              type="button"
+              onClick={handleManualStockUpdate} // Llamada a la función de actualización manual
+              disabled={isUpdatingStock}
+              className={`px-6 py-2 rounded-md text-white font-medium ${
+                isUpdatingStock 
+                  ? 'bg-green-400 cursor-not-allowed' 
+                  : 'bg-green-600 hover:bg-green-700'
+              } focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition-colors flex items-center`}
+            >
+              {isUpdatingStock ? (
+                <>
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Actualizando stock...
+                </>
+              ) : (
+                <>
+                  <FiSave className="mr-2" />
+                  Actualizar Stock por Sucursal
+                </>
+              )}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

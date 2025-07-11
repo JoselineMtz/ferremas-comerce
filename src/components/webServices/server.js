@@ -1,7 +1,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import db from './conexion.js';
+import db from './src/components/webServices/conexion.js';
 import bcrypt from 'bcrypt'; // Importar bcrypt para hashing de contraseñas
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';

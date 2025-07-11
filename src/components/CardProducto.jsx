@@ -29,6 +29,9 @@ const CardProducto = ({ producto, agregarAlCarrito }) => {
     setCantidad(1); // Reiniciar el contador a 1 después de agregar al carrito
   };
 
+  // Asegurarse de que stock_total sea un número para todas las comparaciones y visualizaciones
+  const stockParaMostrar = Number(producto.stock_total || 0);
+
   return (
     <div className="bg-white shadow-md rounded-lg overflow-hidden flex flex-col">
       <img
@@ -58,14 +61,14 @@ const CardProducto = ({ producto, agregarAlCarrito }) => {
         <button
           onClick={handleAgregarClick}
           className="mt-auto bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 transition-colors duration-200"
-          disabled={producto.stock <= 0} // Deshabilitar si no hay stock
+          disabled={stockParaMostrar <= 0} // Deshabilitar si no hay stock_total
         >
-          {producto.stock > 0 ? 'Agregar al carrito' : 'Sin stock'}
+          {stockParaMostrar > 0 ? 'Agregar al carrito' : 'Sin stock'} {/* Usar stock_total para el texto del botón */}
         </button>
-        {producto.stock <= 5 && producto.stock > 0 && (
-          <p className="text-xs text-red-500 mt-1">¡Pocas unidades! Quedan {producto.stock}.</p>
+        {stockParaMostrar <= 5 && stockParaMostrar > 0 && ( // Usar stock_total para la alerta de pocas unidades
+          <p className="text-xs text-red-500 mt-1">¡Pocas unidades! Quedan {stockParaMostrar}.</p>
         )}
-        {producto.stock === 0 && (
+        {stockParaMostrar === 0 && ( // Usar stock_total para el mensaje de agotado
           <p className="text-xs text-red-700 mt-1">Producto agotado.</p>
         )}
       </div>

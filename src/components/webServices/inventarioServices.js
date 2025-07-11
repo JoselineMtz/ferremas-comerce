@@ -3,7 +3,7 @@ import multer from 'multer';
 import path from 'path';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import db from './conexion.js';
+import db from './conexion.js'; // Asegúrate de que esta ruta sea correcta
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -83,7 +83,10 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     endpoints: {
       productos: '/api/productos',
-      categorias: '/api/categorias'
+      categorias: '/api/categorias',
+      sucursales: '/api/sucursales',
+      actualizar_stock_sucursal: '/api/productos/:id/sucursal/:sucursalId/stock (PATCH)',
+      obtener_stock_por_sucursal: '/api/productos/:id/stock-por-sucursal (GET)' // Nuevo endpoint
     },
     uploadsPath: uploadDir
   });
@@ -134,7 +137,8 @@ app.post('/api/productos', (req, res) => {
       console.log('Body recibido:', req.body);
       console.log('Archivo recibido:', req.file);
 
-      const { sku, titulo, descripcion, precio, stock, categoria_id } = req.body;
+      // 'stock' ya no se usa aquí para la tabla de productos
+      const { sku, titulo, descripcion, precio, categoria_id } = req.body; 
       const imagen = req.file?.filename || null;
 
       if (!sku || !titulo || !precio || !categoria_id) {
@@ -142,23 +146,40 @@ app.post('/api/productos', (req, res) => {
         if (req.file) {
           fs.unlinkSync(path.join(uploadDir, req.file.filename));
         }
-        return res.status(400).json({ message: "Faltan campos obligatorios" });
+        return res.status(400).json({ message: "Faltan campos obligatorios (sku, titulo, precio, categoria_id)" });
       }
 
-      console.log('Datos a insertar:', { sku, titulo, descripcion, precio, stock, categoria_id, imagen });
+      console.log('Datos a insertar en productos:', { sku, titulo, descripcion, precio, categoria_id, imagen });
 
       const [result] = await db.query(
         `INSERT INTO productos 
-          (sku, titulo, descripcion, precio, stock, categoria_id, imagen) 
-          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [sku, titulo, descripcion, precio, stock, categoria_id, imagen]
+          (sku, titulo, descripcion, precio, categoria_id, imagen) 
+          VALUES (?, ?, ?, ?, ?, ?)`,
+        [sku, titulo, descripcion, precio, categoria_id, imagen]
       );
 
-      console.log('Resultado de la inserción:', result);
+      const newProductId = result.insertId;
+      console.log('Producto creado exitosamente con ID:', newProductId);
+
+      // --- NUEVA LÓGICA: Inicializar stock en 0 para todas las sucursales ---
+      const [sucursales] = await db.query('SELECT sucursal_id FROM sucursales');
+      if (sucursales.length > 0) {
+        const stockInsertPromises = sucursales.map(s => 
+          db.query(
+            'INSERT INTO sucursal_productos_stock (producto_id, sucursal_id, stock_cantidad) VALUES (?, ?, ?)',
+            [newProductId, s.sucursal_id, 0] // Inicializar stock en 0 para cada sucursal
+          )
+        );
+        await Promise.all(stockInsertPromises);
+        console.log(`Stock inicializado en 0 para el producto ${newProductId} en ${sucursales.length} sucursales.`);
+      } else {
+        console.warn(`No se encontraron sucursales para inicializar el stock del producto ${newProductId}.`);
+      }
+      // --- FIN NUEVA LÓGICA ---
 
       res.status(201).json({
-        message: "Producto creado exitosamente",
-        id: result.insertId,
+        message: "Producto creado exitosamente y stock inicializado en sucursales",
+        id: newProductId,
         sku,
         imagen_url: imagen ? `${req.protocol}://${req.get('host')}/uploads/${imagen}` : null
       });
@@ -178,54 +199,101 @@ app.post('/api/productos', (req, res) => {
 
 app.get('/api/productos', async (req, res) => {
   try {
-    let sql = `SELECT p.*, c.nombre as categoria 
-               FROM productos p 
-               LEFT JOIN categorias c ON p.categoria_id = c.id`;
-    const params = [];
-    
-    // Filtros
-    if (req.query.categoria_id) {
-      sql += " WHERE p.categoria_id = ?";
-      params.push(req.query.categoria_id);
-    }
-    
-    if (req.query.sku) {
-      sql += (params.length ? " AND" : " WHERE") + " p.sku LIKE ?";
-      params.push(`%${req.query.sku}%`);
-    }
-    
-    if (req.query.stock_min) {
-      sql += (params.length ? " AND" : " WHERE") + " p.stock >= ?";
-      params.push(req.query.stock_min);
+    const { categoria_id, sku, titulo, sucursal_id } = req.query;
+    let sql;
+    let params = [];
+    let conditions = [];
+
+    if (sucursal_id) {
+      // Caso 1: Obtener productos para una sucursal específica (usado por VendedorPanel)
+      sql = `
+        SELECT
+            p.*,
+            c.nombre as categoria,
+            COALESCE(sps.stock_cantidad, 0) AS stock_total -- Obtener stock para la sucursal específica
+        FROM
+            productos p
+        LEFT JOIN
+            categorias c ON p.categoria_id = c.id
+        LEFT JOIN
+            sucursal_productos_stock sps ON p.id = sps.producto_id AND sps.sucursal_id = ?
+      `;
+      params.push(sucursal_id); // sucursal_id es el primer parámetro para esta consulta
+      conditions.push("sps.sucursal_id = ?"); // Asegurarse de que solo se obtenga stock de esta sucursal
+      params.push(sucursal_id); // Añadirlo de nuevo para la cláusula WHERE
+
+      // Aplicar filtros de stock_min/stock_max si sucursal_id está presente
+      if (req.query.stock_min) {
+        conditions.push("sps.stock_cantidad >= ?");
+        params.push(req.query.stock_min);
+      }
+      if (req.query.stock_max) {
+        conditions.push("sps.stock_cantidad <= ?");
+        params.push(req.query.stock_max);
+      }
+
+    } else {
+      // Caso 2: Obtener todos los productos con stock total consolidado (usado por ClienteVista)
+      sql = `
+        SELECT
+            p.id,
+            p.titulo,
+            p.descripcion,
+            p.precio,
+            p.imagen,
+            p.sku,
+            p.categoria_id,
+            c.nombre as categoria,
+            COALESCE(SUM(sps.stock_cantidad), 0) AS stock_total -- Sumar stock de todas las sucursales
+        FROM
+            productos p
+        LEFT JOIN
+            categorias c ON p.categoria_id = c.id
+        LEFT JOIN
+            sucursal_productos_stock sps ON p.id = sps.producto_id
+      `;
+      // No hay sucursal_id en los parámetros para esta parte inicial de la consulta
     }
 
-    if (req.query.titulo) {
-      sql += (params.length ? " AND" : " WHERE") + " p.titulo LIKE ?";
-      params.push(`%${req.query.titulo}%`);
+    // Filtros comunes para ambos casos
+    if (categoria_id) {
+      conditions.push("p.categoria_id = ?");
+      params.push(categoria_id);
+    }
+    
+    if (sku) {
+      conditions.push("p.sku LIKE ?");
+      params.push(`%${sku}%`);
+    }
+    
+    if (titulo) {
+      conditions.push("p.titulo LIKE ?");
+      params.push(`%${titulo}%`);
     }
 
-    if (req.query.stock) {
-      sql += (params.length ? " AND" : " WHERE") + " p.stock = ?";
-      params.push(req.query.stock);
+    if (conditions.length > 0) {
+      sql += " WHERE " + conditions.join(" AND ");
     }
 
-    if (req.query.stock_min && req.query.stock_max) {
-      sql += (params.length ? " AND" : " WHERE") + " p.stock BETWEEN ? AND ?";
-      params.push(req.query.stock_min, req.query.stock_max);
+    if (!sucursal_id) {
+      // Agrupar solo para la consulta de stock consolidado
+      sql += ` GROUP BY p.id, p.titulo, p.descripcion, p.precio, p.imagen, p.sku, p.categoria_id, c.nombre`;
     }
 
     sql += " ORDER BY p.id DESC";
 
-    console.log('Consulta SQL:', sql);
-    console.log('Parámetros:', params);
+    console.log('Consulta SQL FINAL:', sql); // Log de la consulta final
+    console.log('Parámetros FINAL:', params); // Log de los parámetros finales
 
     const [productos] = await db.query(sql, params);
     
     const response = productos.map(p => ({
       ...p,
-      imagen_url: p.imagen ? `${req.protocol}://${req.get('host')}/uploads/${p.imagen}` : null
+      imagen_url: p.imagen ? `${req.protocol}://${req.get('host')}/uploads/${p.imagen}` : null,
+      // stock_total ahora siempre estará presente debido a la consulta SQL refactorizada
     }));
 
+    console.log('Productos devueltos por la API (con stock_total):', response.map(p => ({ id: p.id, titulo: p.titulo, stock_total: p.stock_total }))); // Log para verificar stock_total
     res.json(response);
   } catch (err) {
     console.error("Error al obtener productos:", err);
@@ -235,6 +303,29 @@ app.get('/api/productos', async (req, res) => {
     });
   }
 });
+
+// --- NUEVO ENDPOINT: Obtener stock de un producto por sucursal ---
+app.get('/api/productos/:id/stock-por-sucursal', async (req, res) => {
+  try {
+    const { id: productId } = req.params;
+    const [stockData] = await db.query(
+      `SELECT sps.sucursal_id, sps.stock_cantidad, s.nombre as sucursal_nombre
+       FROM sucursal_productos_stock sps
+       JOIN sucursales s ON sps.sucursal_id = s.sucursal_id
+       WHERE sps.producto_id = ?`,
+      [productId]
+    );
+    res.json(stockData);
+  } catch (err) {
+    console.error("Error al obtener stock por sucursal para el producto:", err);
+    res.status(500).json({
+      error: "Error al obtener stock por sucursal",
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined
+    });
+  }
+});
+// --- FIN NUEVO ENDPOINT ---
+
 
 app.put('/api/productos/:id', (req, res) => {
   upload.single('imagen')(req, res, async (err) => {
@@ -249,7 +340,8 @@ app.put('/api/productos/:id', (req, res) => {
       }
 
       const { id } = req.params;
-      const { sku, titulo, descripcion, precio, stock, categoria_id } = req.body;
+      // 'stock' ya no se espera en el body para actualizar la tabla de productos
+      const { sku, titulo, descripcion, precio, categoria_id } = req.body; 
       const newImageFilename = req.file?.filename || null; // Nombre de archivo de la nueva imagen subida
 
       console.log(`[Inventario PUT /api/productos/${id}] Body recibido:`, req.body);
@@ -276,21 +368,20 @@ app.put('/api/productos/:id', (req, res) => {
       const imageToSaveInDB = newImageFilename || currentImageInDB;
       console.log(`[Inventario PUT /api/productos/${id}] Imagen actual en DB: ${currentImageInDB || 'Ninguna'}. Nueva imagen subida: ${newImageFilename || 'Ninguna'}. Imagen a guardar en DB: ${imageToSaveInDB || 'Ninguna'}.`);
 
-      // 3. Realizar la actualización en la base de datos
+      // 3. Realizar la actualización en la base de datos (sin el campo 'stock')
       const [result] = await db.query(
         `UPDATE productos 
           SET sku = ?, titulo = ?, descripcion = ?, precio = ?, 
-              stock = ?, categoria_id = ?, imagen = ?
+            categoria_id = ?, imagen = ?
           WHERE id = ?`,
         [
-          sku,            // Parámetro 1
-          titulo,         // Parámetro 2
-          descripcion,    // Parámetro 3
-          precio,         // Parámetro 4
-          stock,          // Parámetro 5
-          categoria_id,   // Parámetro 6
-          imageToSaveInDB, // Parámetro 7
-          id              // Parámetro 8
+          sku,          
+          titulo,         
+          descripcion,    
+          precio,         
+          categoria_id,   
+          imageToSaveInDB, 
+          id              
         ]
       );
 
@@ -342,35 +433,63 @@ app.put('/api/productos/:id', (req, res) => {
   });
 });
 
-app.patch('/api/productos/:id/stock', async (req, res) => {
+// --- NUEVO ENDPOINT: Actualizar stock de un producto en una sucursal específica ---
+app.patch('/api/productos/:id/sucursal/:sucursalId/stock', async (req, res) => {
   try {
-    const { id } = req.params;
-    const { stock } = req.body;
+    const { id: productId, sucursalId } = req.params;
+    const { stock_cantidad } = req.body;
 
-    if (isNaN(stock) || stock < 0) {
+    // Validaciones
+    if (isNaN(stock_cantidad) || stock_cantidad < 0) {
       return res.status(400).json({ 
-        message: "El stock debe ser un número válido y mayor o igual a 0" 
+        message: "La cantidad de stock debe ser un número válido y mayor o igual a 0" 
       });
     }
 
-    const [result] = await db.query(
-      'UPDATE productos SET stock = ? WHERE id = ?',
-      [stock, id]
-    );
-
-    if (result.affectedRows === 0) {
+    // Verificar si el producto y la sucursal existen (opcional pero recomendado)
+    const [productExists] = await db.query('SELECT id FROM productos WHERE id = ?', [productId]);
+    if (productExists.length === 0) {
       return res.status(404).json({ message: "Producto no encontrado" });
     }
+    const [sucursalExists] = await db.query('SELECT sucursal_id FROM sucursales WHERE sucursal_id = ?', [sucursalId]);
+    if (sucursalExists.length === 0) {
+      return res.status(404).json({ message: "Sucursal no encontrada" });
+    }
 
-    res.json({ message: "Stock actualizado exitosamente" });
+    // Intentar actualizar el stock existente o insertarlo si no existe
+    const [result] = await db.query(
+      `INSERT INTO sucursal_productos_stock (producto_id, sucursal_id, stock_cantidad)
+       VALUES (?, ?, ?)
+       ON DUPLICATE KEY UPDATE stock_cantidad = ?`,
+      [productId, sucursalId, stock_cantidad, stock_cantidad]
+    );
+
+    // affectedRows será 1 para INSERT, 2 para UPDATE (si el valor cambia)
+    if (result.affectedRows === 0) {
+      return res.status(500).json({ message: "No se pudo actualizar/crear el stock para el producto en la sucursal." });
+    }
+
+    res.json({ message: "Stock actualizado exitosamente para la sucursal" });
   } catch (err) {
-    console.error("Error al actualizar stock:", err);
+    console.error("Error al actualizar stock por sucursal:", err);
     res.status(500).json({ 
-      error: "Error al actualizar stock",
+      error: "Error al actualizar stock por sucursal",
       details: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 });
+// --- FIN NUEVO ENDPOINT ---
+
+// El endpoint PATCH /api/productos/:id/stock ya no es relevante para stock global, fue reemplazado.
+// Si aún lo necesitas para otro propósito, ajústalo.
+// Por ahora, lo dejaré comentado o lo eliminaré si no es necesario.
+/*
+app.patch('/api/productos/:id/stock', async (req, res) => {
+  // Esta ruta ahora sería ambigua o incorrecta si el stock es por sucursal.
+  // Deberías usar la nueva ruta PATCH /api/productos/:id/sucursal/:sucursalId/stock
+  res.status(400).json({ message: "Esta ruta no es válida para actualizar stock por sucursal. Use /api/productos/:id/sucursal/:sucursalId/stock" });
+});
+*/
 
 app.delete('/api/productos/:id', async (req, res) => {
   try {
@@ -386,7 +505,7 @@ app.delete('/api/productos/:id', async (req, res) => {
       return res.status(404).json({ message: "Producto no encontrado" });
     }
 
-    // Eliminar producto
+    // Eliminar producto (ON DELETE CASCADE en DB se encargará de sucursal_productos_stock)
     const [result] = await db.query(
       'DELETE FROM productos WHERE id = ?',
       [id]
@@ -485,8 +604,8 @@ app.post('/api/sucursales', async (req, res) => {
     // Insertar todos los campos en la tabla sucursales
     const [result] = await db.query(
       `INSERT INTO sucursales 
-       (nombre, direccion, comuna, region, telefono, horario_apertura, horario_cierre, activa) 
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        (nombre, direccion, comuna, region, telefono, horario_apertura, horario_cierre, activa) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [nombre, direccion, comuna, region, telefono, horario_apertura, horario_cierre, activa]
     );
 

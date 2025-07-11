@@ -128,16 +128,19 @@ app.post('/api/pedidos', authenticateJWT, authorizeVendedor, async (req, res) =>
   const sucursal_empleado_id = req.user.sucursal_id; // Sucursal del empleado (del token)
 
   let final_estado_pedido = estado; // Por defecto, usa el estado enviado por el frontend
+  let stock_update_sucursal_id; // Variable para la sucursal de la que se descontará el stock
 
   // Si sucursal_retiro_id es null o undefined, asumimos que es una venta presencial
   // y forzamos el estado a 'completado'.
   if (sucursal_retiro_id === null || sucursal_retiro_id === undefined) {
     final_estado_pedido = 'Completado'; // Usar 'Completado' con mayúscula inicial si tus estados son así
-    console.log("Detectada venta presencial (sucursal_retiro_id es null/undefined), forzando estado a 'Completado'.");
+    stock_update_sucursal_id = sucursal_empleado_id; // Para venta presencial, descontar de la sucursal del empleado
+    console.log("Detectada venta presencial (sucursal_retiro_id es null/undefined), forzando estado a 'Completado' y descontando stock de la sucursal del empleado.");
   } else {
     console.log("Detectado pedido con sucursal de retiro, usando estado recibido:", estado);
+    stock_update_sucursal_id = sucursal_retiro_id; // Para pedidos con retiro, descontar de la sucursal de retiro
     // Asegurarse de que el estado enviado para pedidos con retiro sea válido, si no, usar 'Pendiente'
-    const estadosValidosPedido = ['Pendiente', 'Preparando', 'Listo para retiro', 'En despacho', 'Entregado', 'Cancelado'];
+    const estadosValidosPedido = ['Pendiente', 'Preparando', 'Listo para retiro', 'En despacho', 'Entregado', 'Cancelado', 'procesado']; // Añadido 'procesado'
     if (!estadosValidosPedido.includes(final_estado_pedido)) {
         final_estado_pedido = 'Pendiente';
         console.warn(`Estado inválido recibido para pedido con retiro (${estado}). Estableciendo a 'Pendiente'.`);
@@ -146,6 +149,11 @@ app.post('/api/pedidos', authenticateJWT, authorizeVendedor, async (req, res) =>
 
   if (!empleado_id || !metodo_pago || !items || items.length === 0) {
     return res.status(400).json({ success: false, message: "Datos de pedido incompletos." });
+  }
+
+  // Validar que tenemos una sucursal para descontar stock
+  if (!stock_update_sucursal_id) {
+    return res.status(400).json({ success: false, message: "No se pudo determinar la sucursal para descontar el stock." });
   }
 
   // Calcular el total de la venta
@@ -176,21 +184,24 @@ app.post('/api/pedidos', authenticateJWT, authorizeVendedor, async (req, res) =>
 
     // 2. Insertar los ítems del pedido en 'detalle_pedido' y actualizar el stock de productos
     for (const item of items) {
-      // Verificar stock actual y precio del producto
-      const [productRows] = await connection.query(
-        'SELECT stock, precio FROM productos WHERE id = ?',
-        [item.producto_id]
+      // Verificar stock actual y precio del producto en la tabla sucursal_productos_stock
+      const [productStockRows] = await connection.query(
+        `SELECT sps.stock_cantidad, p.precio 
+         FROM sucursal_productos_stock sps
+         JOIN productos p ON sps.producto_id = p.id
+         WHERE sps.producto_id = ? AND sps.sucursal_id = ?`,
+        [item.producto_id, stock_update_sucursal_id] // Usar la sucursal_id determinada
       );
 
-      if (productRows.length === 0) {
-        throw new Error(`Producto con ID ${item.producto_id} no encontrado.`);
+      if (productStockRows.length === 0) {
+        throw new Error(`Producto con ID ${item.producto_id} no encontrado en la sucursal ${stock_update_sucursal_id} o no tiene stock registrado.`);
       }
 
-      const currentStock = productRows[0].stock;
-      const productPrice = productRows[0].precio;
+      const currentStock = productStockRows[0].stock_cantidad; // Leer stock_cantidad
+      const productPrice = productStockRows[0].precio;
 
       if (currentStock < item.cantidad) {
-        throw new Error(`Stock insuficiente para el producto ID ${item.producto_id}. Stock actual: ${currentStock}, Solicitado: ${item.cantidad}`);
+        throw new Error(`Stock insuficiente para el producto ID ${item.producto_id} en la sucursal ${stock_update_sucursal_id}. Stock actual: ${currentStock}, Solicitado: ${item.cantidad}`);
       }
       
       // Verificar si el precio unitario del frontend coincide con el precio del producto en DB
@@ -205,17 +216,19 @@ app.post('/api/pedidos', authenticateJWT, authorizeVendedor, async (req, res) =>
         [pedido_id, item.producto_id, item.cantidad, item.precio_unitario]
       );
 
-      // Descontar stock del producto (se asume que 'productos' está en la misma DB)
+      // Descontar stock de la tabla 'sucursal_productos_stock'
+      console.log(`Attempting to update stock: product_id=${item.producto_id}, sucursal_id=${stock_update_sucursal_id}, quantity_to_subtract=${item.cantidad}`); // Log para depuración
       await connection.query(
-        `UPDATE productos SET stock = stock - ? WHERE id = ?`,
-        [item.cantidad, item.producto_id]
+        `UPDATE sucursal_productos_stock SET stock_cantidad = stock_cantidad - ? 
+         WHERE producto_id = ? AND sucursal_id = ?`,
+        [Number(item.cantidad), item.producto_id, stock_update_sucursal_id] // CAMBIO: Conversión explícita a Number
       );
     }
 
     // 3. Insertar el pago en la tabla 'pagos'
     await connection.query(
       `INSERT INTO pagos (pedido_id, cliente_id, monto, metodo_pago, fecha, estado, referencia)
-        VALUES (?, ?, ?, ?, NOW(), ?, ?)`,
+       VALUES (?, ?, ?, ?, NOW(), ?, ?)`,
       [pedido_id, cliente_id, total, metodo_pago, 'Completado', `REF-${Date.now()}-${Math.floor(Math.random() * 1000)}`] // Estado de pago 'Completado'
     );
 
@@ -253,29 +266,29 @@ app.get('/api/pedidos/sucursal/:sucursal_id', authenticateJWT, authorizeBodeguer
     console.log(`[GET /api/pedidos/sucursal/:sucursal_id] Realizando consulta a la base de datos para sucursal_id: ${sucursal_id}`);
     const [pedidos] = await db.query(
       `SELECT 
-         p.id, 
-         p.cliente_id, 
-         p.cliente_rut, 
-         p.empleado_id, 
-         p.sucursal_id, 
-         p.sucursal_retiro_id,
-         p.fecha, 
-         p.total, 
-         p.metodo_pago, 
-         p.estado,
-         c.nombre as cliente_nombre, 
-         c.apellido as cliente_apellido,
-         s.nombre as sucursal_nombre,
-         sr.nombre as sucursal_nombre_retiro,
-         e.nombre as empleado_nombre,
-         e.cargo as empleado_cargo
-       FROM pedidos p
-       LEFT JOIN clientes c ON p.cliente_id = c.id
-       LEFT JOIN sucursales s ON p.sucursal_id = s.sucursal_id
-       LEFT JOIN sucursales sr ON p.sucursal_retiro_id = sr.sucursal_id -- Para la sucursal de retiro si es diferente
-       LEFT JOIN empleados e ON p.empleado_id = e.id
-       WHERE p.sucursal_id = ? OR p.sucursal_retiro_id = ? -- Pedidos de sucursal o pedidos con retiro en sucursal
-       ORDER BY p.fecha DESC`,
+          p.id, 
+          p.cliente_id, 
+          p.cliente_rut, 
+          p.empleado_id, 
+          p.sucursal_id, 
+          p.sucursal_retiro_id,
+          p.fecha, 
+          p.total, 
+          p.metodo_pago, 
+          p.estado,
+          c.nombre as cliente_nombre, 
+          c.apellido as cliente_apellido,
+          s.nombre as sucursal_nombre,
+          sr.nombre as sucursal_nombre_retiro,
+          e.nombre as empleado_nombre,
+          e.cargo as empleado_cargo
+        FROM pedidos p
+        LEFT JOIN clientes c ON p.cliente_id = c.id
+        LEFT JOIN sucursales s ON p.sucursal_id = s.sucursal_id
+        LEFT JOIN sucursales sr ON p.sucursal_retiro_id = sr.sucursal_id -- Para la sucursal de retiro si es diferente
+        LEFT JOIN empleados e ON p.empleado_id = e.id
+        WHERE p.sucursal_id = ? OR p.sucursal_retiro_id = ? -- Pedidos de sucursal o pedidos con retiro en sucursal
+        ORDER BY p.fecha DESC`,
       [sucursal_id, sucursal_id]
     );
     console.log(`[GET /api/pedidos/sucursal/:sucursal_id] Pedidos encontrados (cantidad): ${pedidos.length}`);
@@ -284,9 +297,9 @@ app.get('/api/pedidos/sucursal/:sucursal_id', authenticateJWT, authorizeBodeguer
     for (let pedido of pedidos) {
       const [detalle] = await db.query(
         `SELECT dp.producto_id, dp.cantidad, dp.precio_unitario, pr.titulo as producto_titulo, pr.sku as producto_sku
-         FROM detalle_pedidos dp -- CAMBIO APLICADO AQUÍ: de detalle_pedido a detalle_pedidos
-         JOIN productos pr ON dp.producto_id = pr.id
-         WHERE dp.pedido_id = ?`,
+          FROM detalle_pedidos dp -- CAMBIO APLICADO AQUÍ: de detalle_pedido a detalle_pedidos
+          JOIN productos pr ON dp.producto_id = pr.id
+          WHERE dp.pedido_id = ?`,
         [pedido.id]
       );
       pedido.items = detalle;
@@ -363,26 +376,27 @@ app.get('/api/pedidos/empleado/:empleado_id', authenticateJWT, authorizeEmpleado
   try {
     const [pedidos] = await db.query(
       `SELECT 
-         p.id, 
-         p.cliente_id, 
-         p.cliente_rut, 
-         p.empleado_id, 
-         p.sucursal_id, 
-         p.sucursal_retiro_id,
-         p.fecha, 
-         p.total, 
-         p.metodo_pago, 
-         p.estado,
-         c.nombre as cliente_nombre, 
-         c.apellido as cliente_apellido,
-         s_origen.nombre as sucursal_nombre,
-         s_retiro.nombre as sucursal_nombre_retiro
-       FROM pedidos p
-       LEFT JOIN clientes c ON p.cliente_id = c.id
-       LEFT JOIN sucursales s_origen ON p.sucursal_id = s_origen.sucursal_id
-       LEFT JOIN sucursales s_retiro ON p.sucursal_retiro_id = s_retiro.sucursal_id
-       WHERE p.empleado_id = ?
-       ORDER BY p.fecha DESC`,
+          p.id, 
+          p.cliente_id, 
+          p.cliente_rut, 
+          p.empleado_id, 
+          p.sucursal_id, 
+          p.sucursal_retiro_id,
+          p.fecha, 
+          p.total, 
+          p.metodo_pago, 
+          p.estado,
+          c.nombre as cliente_nombre, 
+          c.apellido as cliente_apellido,
+          s_origen.nombre as sucursal_nombre,
+          s_retiro.nombre as sucursal_nombre_retiro
+        FROM pedidos p
+        LEFT JOIN clientes c ON p.cliente_id = c.id
+        LEFT JOIN sucursales s_origen ON p.sucursal_id = s_origen.sucursal_id
+        LEFT JOIN sucursales s_retiro ON p.sucursal_retiro_id = s_retiro.sucursal_id
+        LEFT JOIN empleados e ON p.empleado_id = e.id
+        WHERE p.empleado_id = ?
+        ORDER BY p.fecha DESC`,
       [empleado_id]
     );
 
@@ -392,6 +406,7 @@ app.get('/api/pedidos/empleado/:empleado_id', authenticateJWT, authorizeEmpleado
     res.status(500).json({ success: false, message: "Error al obtener ventas del empleado." });
   }
 });
+
 
 // RUTA para obtener un pedido específico y sus productos
 app.get('/api/pedidos/:id', async (req, res) => {
@@ -577,26 +592,27 @@ app.get('/api/pedidos/empleado/:empleado_id', authenticateJWT, authorizeEmpleado
   try {
     const [pedidos] = await db.query(
       `SELECT 
-         p.id, 
-         p.cliente_id, 
-         p.cliente_rut, 
-         p.empleado_id, 
-         p.sucursal_id, 
-         p.sucursal_retiro_id,
-         p.fecha, 
-         p.total, 
-         p.metodo_pago, 
-         p.estado,
-         c.nombre as cliente_nombre, 
-         c.apellido as cliente_apellido,
-         s_origen.nombre as sucursal_nombre,
-         s_retiro.nombre as sucursal_nombre_retiro
-       FROM pedidos p
-       LEFT JOIN clientes c ON p.cliente_id = c.id
-       LEFT JOIN sucursales s_origen ON p.sucursal_id = s_origen.sucursal_id
-       LEFT JOIN sucursales s_retiro ON p.sucursal_retiro_id = s_retiro.sucursal_id
-       WHERE p.empleado_id = ?
-       ORDER BY p.fecha DESC`,
+          p.id, 
+          p.cliente_id, 
+          p.cliente_rut, 
+          p.empleado_id, 
+          p.sucursal_id, 
+          p.sucursal_retiro_id,
+          p.fecha, 
+          p.total, 
+          p.metodo_pago, 
+          p.estado,
+          c.nombre as cliente_nombre, 
+          c.apellido as cliente_apellido,
+          s_origen.nombre as sucursal_nombre,
+          s_retiro.nombre as sucursal_nombre_retiro
+        FROM pedidos p
+        LEFT JOIN clientes c ON p.cliente_id = c.id
+        LEFT JOIN sucursales s_origen ON p.sucursal_id = s_origen.sucursal_id
+        LEFT JOIN sucursales s_retiro ON p.sucursal_retiro_id = s_retiro.sucursal_id
+        LEFT JOIN empleados e ON p.empleado_id = e.id
+        WHERE p.empleado_id = ?
+        ORDER BY p.fecha DESC`,
       [empleado_id]
     );
 
@@ -643,7 +659,7 @@ app.get('/api/pedidos/retiro', authenticateJWT, authorizeBodeguero, async (req, 
       JOIN sucursales s ON p.sucursal_retiro_id = s.sucursal_id
       LEFT JOIN detalle_pedidos dp ON p.id = dp.pedido_id
       LEFT JOIN productos prod ON dp.producto_id = prod.id
-      WHERE p.sucursal_retiro_id = ? AND p.estado IN ('Pendiente', 'Preparando', 'Listo para retiro')
+      WHERE p.sucursal_retiro_id = ? AND p.estado IN ('Pendiente', 'Preparando', 'Listo para retiro', 'procesado') -- Añadido 'procesado'
       GROUP BY p.id, p.fecha, p.estado, p.total, c.nombre, c.apellido, c.correo, s.nombre, s.direccion
       ORDER BY p.fecha DESC`;
     
@@ -665,7 +681,7 @@ app.put('/api/pedidos/:id/estado', authenticateJWT, authorizeBodeguero, async (r
   const { id } = req.params;
   const { estado } = req.body;
   const user = req.user; // Bodeguero del token
-  const estadosValidos = ['Pendiente', 'Preparando', 'Listo para retiro', 'En despacho', 'Entregado', 'Cancelado'];
+  const estadosValidos = ['Pendiente', 'Preparando', 'Listo para retiro', 'En despacho', 'Entregado', 'Cancelado', 'Completado'];
 
   if (!estado || !estadosValidos.includes(estado)) {
     return res.status(400).json({ success: false, message: 'Estado de pedido inválido.' });
@@ -723,11 +739,10 @@ app.listen(PEDIDOS_PORT, () => {
       if (r.handle && r.handle.stack) {
         r.handle.stack.forEach(function(hr) {
           if (hr.route && hr.route.path){
-            console.log(`  Sub-Ruta: ${hr.route.path}, Métodos: ${Object.keys(hr.route.methods).join(', ').toUpperCase()}`);
+            console.log(`   Sub-Ruta: ${hr.route.path}, Métodos: ${Object.keys(hr.route.methods).join(', ').toUpperCase()}`);
           }
         });
       }
     }
   });
-  console.log("=================================================\n");
 });
