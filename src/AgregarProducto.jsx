@@ -36,7 +36,11 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
           axios.get('http://localhost:5003/api/sucursales') // Cargar sucursales
         ]);
         setCategorias(categoriasRes.data);
-        setSucursales(sucursalesRes.data);
+        // Asegúrate de que las sucursales tengan un id consistente (sucursal_id)
+        setSucursales(sucursalesRes.data.map(s => ({
+          sucursal_id: s.sucursal_id || s.id, // Asegura que siempre use sucursal_id
+          nombre: s.nombre || s.name // Asegura que siempre use nombre
+        })));
       } catch (error) {
         console.error('Error al obtener datos iniciales (categorías/sucursales)', error);
         mostrarMensaje('danger', 'Error al obtener datos. Intente recargar la página.');
@@ -303,11 +307,11 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
       const { successCount, errorCount } = await updateStockForProductInBranches(productIdToUpdateStock, productStockPerBranch);
 
       if (isEditMode) {
-         if (errorCount > 0) {
-             mostrarMensaje('warning', `Producto actualizado. Hubo errores al actualizar stock en ${errorCount} sucursales.`);
-         } else {
-             mostrarMensaje('success', 'Producto y stock por sucursal actualizados correctamente!');
-         }
+           if (errorCount > 0) {
+               mostrarMensaje('warning', `Producto actualizado. Hubo errores al actualizar stock en ${errorCount} sucursales.`);
+           } else {
+               mostrarMensaje('success', 'Producto y stock por sucursal actualizados correctamente!');
+           }
       } else {
           if (errorCount > 0) {
               mostrarMensaje('warning', `Producto agregado. Hubo errores al inicializar stock en ${errorCount} sucursales.`);
@@ -339,7 +343,8 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
         errorMsg = 'Error de red: No se pudo conectar con el servidor. Asegúrate de que el backend esté funcionando.';
       } else {
         // Algo sucedió al configurar la solicitud que provocó un error
-        errorMsg = `Error inesperado: ${error.message}`;
+        // errorMsg = `Error inesperado: ${error.message}`; // Comentado para evitar mostrar mensajes internos si no es desarrollo
+        errorMsg = `Error inesperado al procesar la solicitud.`;
       }
       mostrarMensaje('danger', errorMsg);
     } finally {
@@ -576,6 +581,70 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
           </div>
         </div>
 
+        {/* Sección para actualizar stock por sucursal (MOVIDA AQUÍ) */}
+        <div className="bg-white p-6 rounded-lg shadow-md mt-6"> {/* Ajustado mt-8 a mt-6 */}
+          <h3 className="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+            <FiPackage className="mr-2" /> Stock por Sucursal
+          </h3>
+          <p className="text-sm text-gray-600 mb-4">
+            {isEditMode 
+              ? 'Actualiza la cantidad de stock de este producto para cada sucursal.'
+              : 'Establece la cantidad de stock inicial para este producto en cada sucursal.'
+            }
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {sucursales.length > 0 ? (
+              sucursales.map(sucursal => (
+                <div key={sucursal.sucursal_id} className="border border-gray-200 rounded-md p-4">
+                  <label className="block text-gray-700 font-medium mb-2">
+                    {sucursal.nombre} (ID: {sucursal.sucursal_id})
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={productStockPerBranch[sucursal.sucursal_id] || 0}
+                    onChange={(e) => handleStockChange(sucursal.sucursal_id, e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Cantidad de stock"
+                  />
+                </div>
+              ))
+            ) : (
+              <p className="col-span-full text-gray-500">No hay sucursales disponibles para gestionar el stock.</p>
+            )}
+          </div>
+          {/* El botón de actualización manual solo es relevante en modo edición */}
+          {isEditMode && (
+            <div className="mt-6 flex justify-end">
+              <button
+                type="button"
+                onClick={handleManualStockUpdate} // Llamada a la función de actualización manual
+                disabled={isUpdatingStock}
+                className={`px-6 py-2 rounded-md text-white font-medium ${
+                  isUpdatingStock 
+                    ? 'bg-green-400 cursor-not-allowed' 
+                    : 'bg-green-600 hover:bg-green-700'
+                } focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition-colors flex items-center`}
+              >
+                {isUpdatingStock ? (
+                  <>
+                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Actualizando stock...
+                  </>
+                ) : (
+                  <>
+                    <FiSave className="mr-2" />
+                    Actualizar Stock por Sucursal
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+        </div>
+
         <div className="mt-6 flex justify-end space-x-3">
           <button
             type="button"
@@ -611,70 +680,6 @@ const AgregarProducto = ({ productToEdit, onProductSaved, onCloseForm }) => {
           </button>
         </div>
       </form>
-
-      {/* Sección para actualizar stock por sucursal (siempre visible) */}
-      <div className="bg-white p-6 rounded-lg shadow-md mt-8">
-        <h3 className="text-xl font-semibold text-gray-800 mb-4 flex items-center">
-          <FiPackage className="mr-2" /> Stock por Sucursal
-        </h3>
-        <p className="text-sm text-gray-600 mb-4">
-          {isEditMode 
-            ? 'Actualiza la cantidad de stock de este producto para cada sucursal.'
-            : 'Establece la cantidad de stock inicial para este producto en cada sucursal.'
-          }
-        </p>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {sucursales.length > 0 ? (
-            sucursales.map(sucursal => (
-              <div key={sucursal.sucursal_id} className="border border-gray-200 rounded-md p-4">
-                <label className="block text-gray-700 font-medium mb-2">
-                  {sucursal.nombre} (ID: {sucursal.sucursal_id})
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  value={productStockPerBranch[sucursal.sucursal_id] || 0}
-                  onChange={(e) => handleStockChange(sucursal.sucursal_id, e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  placeholder="Cantidad de stock"
-                />
-              </div>
-            ))
-          ) : (
-            <p className="col-span-full text-gray-500">No hay sucursales disponibles para gestionar el stock.</p>
-          )}
-        </div>
-        {/* El botón de actualización manual solo es relevante en modo edición */}
-        {isEditMode && (
-          <div className="mt-6 flex justify-end">
-            <button
-              type="button"
-              onClick={handleManualStockUpdate} // Llamada a la función de actualización manual
-              disabled={isUpdatingStock}
-              className={`px-6 py-2 rounded-md text-white font-medium ${
-                isUpdatingStock 
-                  ? 'bg-green-400 cursor-not-allowed' 
-                  : 'bg-green-600 hover:bg-green-700'
-              } focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 transition-colors flex items-center`}
-            >
-              {isUpdatingStock ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Actualizando stock...
-                </>
-              ) : (
-                <>
-                  <FiSave className="mr-2" />
-                  Actualizar Stock por Sucursal
-                </>
-              )}
-            </button>
-          </div>
-        )}
-      </div>
     </div>
   );
 };
