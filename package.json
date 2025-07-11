@@ -4,15 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-
     "build": "vite build",
     "preview": "vite preview",
     "client": "vite",
-
-    "start:pedidos-backend": "node pedidosServices.js",
-    "start:mercado-pago-backend": "node mercadoPago.js",
-    "start:inventario-backend": "node inventarioServices.js",
-    "start:main-backend": "node server.js",
+    "start:pedidos-backend": "node ./webServices/pedidosServices.js",
+    "start:mercado-pago-backend": "node ./webServices/mercadoPago.js",
+    "start:inventario-backend": "node ./webServices/inventarioServices.js",
+    "start:main-backend": "node ./webServices/server.js",
     "start:frontend": "cd frontend && npm start",
     "start:all": "concurrently \"npm run start:auth-backend\" \"npm run start:pedidos-backend\" \"npm run start:mercado-pago-backend\" \"npm run start:inventario-backend\" \"npm run start:main-backend\" \"npm run start:frontend\""
   },
