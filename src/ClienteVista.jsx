@@ -29,6 +29,25 @@ const ClienteVista = () => {
   // NUEVO ESTADO: Para controlar la visualización de los últimos 15 productos
   const [showLatestProducts, setShowLatestProducts] = useState(true);
 
+  // NUEVOS ESTADOS para mensajes de usuario
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  // Función para mostrar mensajes temporales
+  const showTemporaryMessage = (msg, type = 'success') => {
+    if (type === 'success') {
+      setMessage(msg);
+      setError('');
+    } else {
+      setError(msg);
+      setMessage('');
+    }
+    setTimeout(() => {
+      setMessage('');
+      setError('');
+    }, 3000); // El mensaje desaparecerá después de 3 segundos
+  };
+
   // Función auxiliar para formatear a moneda chilena (CLP)
   const formatCurrencyCLP = (amount) => {
     const numericAmount = parseFloat(amount);
@@ -38,7 +57,7 @@ const ClienteVista = () => {
     return new Intl.NumberFormat('es-CL', {
       style: 'currency',
       currency: 'CLP',
-      minimumFractionDigits: 0,
+      minimumFractionFractionDigits: 0,
       maximumFractionDigits: 0,
     }).format(numericAmount);
   };
@@ -47,14 +66,20 @@ const ClienteVista = () => {
   useEffect(() => {
     const fetchInitialData = async () => {
       try {
+        // Esta llamada ahora debería devolver los productos con 'stock_total'
         const productsResponse = await axios.get('http://localhost:5003/api/productos');
         setProductos(productsResponse.data); // Guarda todos los productos
         console.log("Productos cargados:", productsResponse.data.length);
+        // Log para verificar el stock_total de los productos directamente después de cargarlos
+        productsResponse.data.forEach(p => {
+          console.log(`Producto ID: ${p.id}, Título: ${p.titulo}, Stock Total: ${p.stock_total}`);
+        });
 
         const categoriesResponse = await axios.get('http://localhost:5003/api/categorias');
         setCategorias(categoriesResponse.data);
-      } catch (error) {
-        console.error('Error al cargar productos o categorías:', error);
+      } catch (err) { // Cambiado 'error' a 'err' para evitar conflicto con el estado error
+        console.error('Error al cargar productos o categorías:', err);
+        showTemporaryMessage('Error al cargar productos o categorías: ' + (err.response?.data?.message || err.message), 'error');
       }
     };
     fetchInitialData();
@@ -69,10 +94,11 @@ const ClienteVista = () => {
       } else {
         setCarrito([]);
       }
-    } catch (error) {
-      console.error("Error al parsear carrito de localStorage:", error);
+    } catch (err) { // Cambiado 'error' a 'err'
+      console.error("Error al parsear carrito de localStorage:", err);
       localStorage.removeItem('carrito');
       setCarrito([]);
+      showTemporaryMessage("Error al cargar carrito guardado.", 'error');
     }
   }, [isAuthenticated]);
 
@@ -89,13 +115,17 @@ const ClienteVista = () => {
   const agregarAlCarrito = (producto, cantidadAAgregar) => {
     const cantidad = Number(cantidadAAgregar);
     if (cantidad <= 0 || isNaN(cantidad)) {
-      alert("Por favor, ingresa una cantidad válida (mayor a 0).");
+      showTemporaryMessage("Por favor, ingresa una cantidad válida (mayor a 0).", 'error');
       return;
     }
 
     const productoEnCatalogo = productos.find(p => p.id === producto.id);
-    if (!productoEnCatalogo || productoEnCatalogo.stock < cantidad) {
-      alert(`Stock insuficiente para "${producto.titulo}". Disponible: ${productoEnCatalogo?.stock || 0}`);
+    
+    // Asegurarse de que stock_total sea un número antes de la comparación
+    const stockDisponible = Number(productoEnCatalogo?.stock_total || 0); 
+
+    if (!productoEnCatalogo || stockDisponible < cantidad) {
+      showTemporaryMessage(`Stock insuficiente para "${producto.titulo}". Disponible: ${stockDisponible}`, 'error'); 
       return;
     }
 
@@ -105,8 +135,9 @@ const ClienteVista = () => {
       const carritoActualizado = carrito.map((item, index) => {
         if (index === productoExistenteIndex) {
           const nuevaCantidadEnCarrito = item.cantidad + cantidad;
-          if (productoEnCatalogo.stock < nuevaCantidadEnCarrito) {
-            alert(`No se puede agregar más. Stock máximo para "${producto.titulo}" alcanzado. Stock total: ${productoEnCatalogo.stock}`);
+          // Usar stockDisponible (que ya es un número) para la verificación
+          if (stockDisponible < nuevaCantidadEnCarrito) { 
+            showTemporaryMessage(`No se puede agregar más. Stock máximo para "${producto.titulo}" alcanzado. Stock total: ${stockDisponible}`, 'error'); 
             return item;
           }
           return { ...item, cantidad: nuevaCantidadEnCarrito };
@@ -117,11 +148,12 @@ const ClienteVista = () => {
     } else {
       setCarrito([...carrito, { ...producto, cantidad: cantidad }]);
     }
-    alert(`"${producto.titulo}" x ${cantidad} agregado(s) al carrito.`);
+    showTemporaryMessage(`"${producto.titulo}" x ${cantidad} agregado(s) al carrito.`, 'success');
   };
 
   const quitarDelCarrito = (productoId) => {
     setCarrito(carrito.filter(item => item.id !== productoId));
+    showTemporaryMessage("Producto quitado del carrito.", 'success');
   };
 
   const toggleCarritoMenu = () => {
@@ -131,11 +163,11 @@ const ClienteVista = () => {
   // Función para manejar el clic en el botón de pagar
   const handlePagarCarrito = () => {
     if (carrito.length === 0) {
-      alert("Tu carrito está vacío. Agrega productos antes de pagar.");
+      showTemporaryMessage("Tu carrito está vacío. Agrega productos antes de pagar.", 'error');
       return;
     }
     if (!isAuthenticated) {
-      alert("Debes iniciar sesión para completar tu compra. Tu carrito se ha guardado.");
+      showTemporaryMessage("Debes iniciar sesión para completar tu compra. Tu carrito se ha guardado.", 'error');
       navigate("/login");
       return;
     }
@@ -222,6 +254,18 @@ const ClienteVista = () => {
 
       {/* Div espaciador para asegurar espacio debajo del Navbar */}
       <div className="h-36 w-full"></div>
+
+      {/* Mensajes de éxito y error */}
+      {error && (
+        <div className="container mx-auto p-4 bg-red-100 text-red-700 rounded-lg shadow-md mb-4 mt-2">
+          {error}
+        </div>
+      )}
+      {message && (
+        <div className="container mx-auto p-4 bg-green-100 text-green-700 rounded-lg shadow-md mb-4 mt-2">
+          {message}
+        </div>
+      )}
 
       {menuCarrito && (
         <div className="absolute top-16 right-4 bg-white shadow-lg p-4 w-64 z-50 rounded-lg">
@@ -331,6 +375,8 @@ const ClienteVista = () => {
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
           {displayedProducts.length > 0 ? (
             displayedProducts.map((producto) => (
+              // Asegúrate de que CardProducto pueda manejar la prop stock_total
+              // y que dentro de CardProducto, la lógica de "sin stock" use producto.stock_total
               <CardProducto key={producto.id} producto={producto} agregarAlCarrito={agregarAlCarrito} />
             ))
           ) : (

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react'; // Importar useMemo
 import { useAuth } from './AuthContext';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
@@ -13,7 +13,7 @@ const VendedorPanel = () => {
   const [selectedProduct, setSelectedProduct] = useState('');
   const [cantidad, setCantidad] = useState(1);
   const [metodoPago, setMetodoPago] = useState('Efectivo');
-  
+
   // Estados para el cliente y su registro (ahora más específicos para Pedido)
   const [clienteRut, setClienteRut] = useState('');
   const [clienteExiste, setClienteExiste] = useState(null); // null: no verificado, true: existe, false: no existe
@@ -31,10 +31,10 @@ const VendedorPanel = () => {
   const [totalVenta, setTotalVenta] = useState(0);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  
+
   const [activeForm, setActiveForm] = useState('in_store_sale');
   const [sucursalRetiroId, setSucursalRetiroId] = useState(''); // CORRECCIÓN: Nombre de estado
-  
+
   // Función auxiliar para formatear a moneda chilena (CLP)
   const formatCurrencyCLP = (amount) => {
     const numericAmount = parseFloat(amount);
@@ -62,16 +62,27 @@ const VendedorPanel = () => {
           const profileResponse = await axios.get('http://localhost:3006/api/empleados/perfil', {
             headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
           });
-          setEmpleadoProfile(profileResponse.data.data);
+          const profileData = profileResponse.data.data;
+          setEmpleadoProfile(profileData);
 
-          const productsResponse = await axios.get('http://localhost:5003/api/productos');
+          // Obtener la sucursal del empleado para filtrar los productos
+          const sucursalIdDelVendedor = profileData.sucursal_id;
+
+          let productsResponse;
+          if (activeForm === 'in_store_sale' && sucursalIdDelVendedor) {
+            // Cargar solo productos de la sucursal del vendedor para venta presencial
+            productsResponse = await axios.get(`http://localhost:5003/api/productos?sucursal_id=${sucursalIdDelVendedor}`);
+          } else {
+            // Cargar todos los productos para pedidos o si no hay sucursal del vendedor definida
+            productsResponse = await axios.get('http://localhost:5003/api/productos');
+          }
           setProductos(productsResponse.data);
 
           const sucursalesResponse = await axios.get('http://localhost:5003/api/sucursales');
           const rawSucursales = sucursalesResponse.data.data || sucursalesResponse.data;
           if (Array.isArray(rawSucursales)) {
             const formattedSucursales = rawSucursales.map(s => ({
-              sucursal_id: s.sucursal_id || s.id, 
+              sucursal_id: s.sucursal_id || s.id,
               nombre: s.nombre || s.name
             }));
             setSucursalesDisponibles(formattedSucursales);
@@ -87,13 +98,15 @@ const VendedorPanel = () => {
       };
       fetchData();
     }
-  }, [isAuthenticated, user, loading, navigate]);
+  }, [isAuthenticated, user, loading, navigate, activeForm]); // Agregamos activeForm como dependencia
 
   const handleAddItem = () => {
     const productToAdd = productos.find(p => p.id === parseInt(selectedProduct));
     if (productToAdd && cantidad > 0) {
-      if (productToAdd.stock < cantidad) {
-        setError(`Stock insuficiente para ${productToAdd.titulo}. Disponible: ${productToAdd.stock}`);
+      // Usar productToAdd.stock_total para la verificación de stock
+      // stock_total contendrá el stock de la sucursal si se filtró por sucursal_id
+      if (Number(productToAdd.stock_total) < cantidad) { // CAMBIO CLAVE AQUÍ: Usar stock_total y asegurar que es número
+        setError(`Stock insuficiente para ${productToAdd.titulo}. Disponible: ${Number(productToAdd.stock_total)}`); // CAMBIO CLAVE AQUÍ
         return;
       }
 
@@ -114,7 +127,7 @@ const VendedorPanel = () => {
           precio_unitario: productToAdd.precio,
         }]);
       }
-      
+
       setTotalVenta(prevTotal => prevTotal + (productToAdd.precio * cantidad));
       setError('');
     } else {
@@ -164,7 +177,7 @@ const VendedorPanel = () => {
 
     try {
       const response = await axios.get(`http://localhost:3006/api/clientes/by-rut/${rutLimpio}`);
-      
+
       if (response.data.exists) {
         setClienteExiste(true);
         setClienteData(response.data.data);
@@ -249,23 +262,23 @@ const VendedorPanel = () => {
     const rutParaEnviar = clienteRut.trim();
 
     if (activeForm === 'shipping_order') {
-        if (rutParaEnviar === '') {
-            setError('Para un pedido de retiro/despacho, el RUT del cliente es obligatorio.');
-            return;
-        }
-        if (clienteExiste === true && clienteData && clienteData.id) {
-            id_cliente_para_pedido = clienteData.id;
-        } else if (clienteExiste === false) {
-            setError('El RUT ingresado no está registrado. Por favor, regístrelo antes de continuar con el pedido.');
-            setMostrarFormularioNuevoCliente(true);
-            return;
-        } else if (clienteExiste === null) {
-            setError('Debe verificar el RUT del cliente antes de continuar con el pedido.');
-            return;
-        }
+      if (rutParaEnviar === '') {
+        setError('Para un pedido de retiro/despacho, el RUT del cliente es obligatorio.');
+        return;
+      }
+      if (clienteExiste === true && clienteData && clienteData.id) {
+        id_cliente_para_pedido = clienteData.id;
+      } else if (clienteExiste === false) {
+        setError('El RUT ingresado no está registrado. Por favor, regístrelo antes de continuar con el pedido.');
+        setMostrarFormularioNuevoCliente(true);
+        return;
+      } else if (clienteExiste === null) {
+        setError('Debe verificar el RUT del cliente antes de continuar con el pedido.');
+        return;
+      }
     } else { // activeForm === 'in_store_sale' (Venta Presencial)
-        id_cliente_para_pedido = null; 
-        setError('');
+      id_cliente_para_pedido = null;
+      setError('');
     }
 
     try {
@@ -313,7 +326,7 @@ const VendedorPanel = () => {
   return (
     <div className="flex-1 p-8 bg-gray-100">
       <h1 className="text-3xl font-bold text-gray-800 mb-6">Panel de Vendedor</h1>
-      
+
       {empleadoProfile && (
         <div className="bg-white p-6 rounded-lg shadow-md mb-6">
           <h2 className="text-xl font-semibold mb-3">Bienvenido, {empleadoProfile.nombre} ({empleadoProfile.cargo})</h2>
@@ -355,9 +368,9 @@ const VendedorPanel = () => {
                 type="text"
                 className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
                 value={clienteRut}
-                onChange={(e) => { 
-                  setClienteRut(e.target.value); 
-                  if (error.includes('cliente')) setError(''); 
+                onChange={(e) => {
+                  setClienteRut(e.target.value);
+                  if (error.includes('cliente')) setError('');
                 }}
                 placeholder="Ej: 12.345.678-9"
               />
@@ -376,7 +389,7 @@ const VendedorPanel = () => {
                 <option value="">Seleccione un producto</option>
                 {productos.map(p => (
                   <option key={p.id} value={p.id}>
-                    {p.titulo} - {formatCurrencyCLP(p.precio)} (Stock: {p.stock})
+                    {p.titulo} - {formatCurrencyCLP(p.precio)} (Stock: {p.stock_total !== undefined ? Number(p.stock_total) : 'N/A'}) {/* CAMBIO CLAVE AQUÍ: Usar stock_total */}
                   </option>
                 ))}
               </select>
@@ -410,7 +423,7 @@ const VendedorPanel = () => {
                   {ventaItems.map((item, index) => (
                     <li key={index} className="flex justify-between items-center py-2 border-b last:border-b-0">
                       <span>{item.titulo} x {item.cantidad} ({formatCurrencyCLP(item.precio_unitario)} c/u)</span>
-                      <button 
+                      <button
                         onClick={() => handleRemoveItem(index)}
                         className="text-red-500 hover:text-red-700 text-sm"
                       >
@@ -453,7 +466,7 @@ const VendedorPanel = () => {
         {activeForm === 'shipping_order' && (
           <div className="bg-white p-6 rounded-lg shadow-md">
             <h2 className="text-xl font-semibold mb-4">Generar Pedido para Retiro/Despacho</h2>
-            
+
             {/* Sección de Cliente (con verificación y registro obligatorio) */}
             <div className="mb-6 p-4 border rounded-md bg-gray-50">
               <h3 className="text-lg font-semibold mb-3 flex items-center">
@@ -468,11 +481,9 @@ const VendedorPanel = () => {
                     type="text"
                     className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
                     value={clienteRut}
-                    onChange={(e) => { 
-                      setClienteRut(e.target.value); 
-                      setClienteExiste(null); // Resetear estado de verificación al cambiar RUT
-                      setClienteData(null);
-                      setMostrarFormularioNuevoCliente(false);
+                    onChange={(e) => {
+                      setClienteRut(e.target.value);
+                      if (error.includes('cliente')) setError('');
                     }}
                     placeholder="Ej: 12.345.678-9"
                     required={activeForm === 'shipping_order'}
@@ -552,8 +563,9 @@ const VendedorPanel = () => {
               >
                 <option value="">Seleccione un producto</option>
                 {productos.map(p => (
+                  // Para pedidos, el stock_total es el consolidado de todas las sucursales
                   <option key={p.id} value={p.id}>
-                    {p.titulo} - {formatCurrencyCLP(p.precio)} (Stock: {p.stock})
+                    {p.titulo} - {formatCurrencyCLP(p.precio)} (Stock: {p.stock_total !== undefined ? Number(p.stock_total) : 'N/A'}) {/* CAMBIO CLAVE AQUÍ: Usar stock_total */}
                   </option>
                 ))}
               </select>
@@ -587,7 +599,7 @@ const VendedorPanel = () => {
                   {ventaItems.map((item, index) => (
                     <li key={index} className="flex justify-between items-center py-2 border-b last:border-b-0">
                       <span>{item.titulo} x {item.cantidad} ({formatCurrencyCLP(item.precio_unitario)} c/u)</span>
-                      <button 
+                      <button
                         onClick={() => handleRemoveItem(index)}
                         className="text-red-500 hover:text-red-700 text-sm"
                       >
